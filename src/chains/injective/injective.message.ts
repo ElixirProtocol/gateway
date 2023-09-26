@@ -1,6 +1,5 @@
 import { BigNumberInBase, DEFAULT_STD_FEE } from '@injectivelabs/utils';
 import {
-  PrivateKey,
   Msgs,
   createTransaction,
   getEthereumSignerAddress,
@@ -22,6 +21,7 @@ import LRUCache from 'lru-cache';
 import { getInjectiveConfig } from './injective.config';
 import { networkToString } from './injective.mappers';
 import { AccountDetails } from '@injectivelabs/sdk-ts/dist/cjs/types/auth';
+import { HsmSession } from "./injective.hsm";
 
 interface MsgBroadcasterTxOptions {
   msgs: Msgs | Msgs[];
@@ -46,7 +46,7 @@ interface MsgBroadcasterOptionsLocal {
     grpc: string;
     rest: string;
   };
-  privateKey: string;
+  hsm: HsmSession;
   ethereumChainId?: EthereumChainId;
 }
 
@@ -65,7 +65,7 @@ export class MsgBroadcasterLocal {
 
   public chainId: string;
 
-  private _privateKey: PrivateKey;
+  private _hsm: HsmSession;
 
   private _accountDetails: LRUCache<string, AccountDetails>;
 
@@ -84,7 +84,7 @@ export class MsgBroadcasterLocal {
     this.chainId = networkInfo.chainId;
     this.endpoints = { ...endpoints, ...(endpoints || {}) };
     this._chain = Injective.getInstance(options.network);
-    this._privateKey = PrivateKey.fromHex(options.privateKey);
+    this._hsm = options.hsm;
     const config = getInjectiveConfig(networkToString(options.network));
     this._accountDetails = new LRUCache<string, AccountDetails>({
       max: config.network.maxLRUCacheInstances,
@@ -106,7 +106,7 @@ export class MsgBroadcasterLocal {
         max: config.network.maxLRUCacheInstances,
       });
     }
-    const instanceKey = options.network + options.privateKey;
+    const instanceKey = options.network + options.hsm?.hsm_key_label;
     if (!MsgBroadcasterLocal._instances.has(instanceKey)) {
       MsgBroadcasterLocal._instances.set(
         instanceKey,
@@ -224,19 +224,19 @@ export class MsgBroadcasterLocal {
     accountDetails: AccountDetails,
     sequence: number
   ): Promise<{ data: any }> {
-    const { signBytes, txRaw } = createTransaction({
+    const { signHashedBytes, txRaw } = createTransaction({
       memo: '',
       fee: DEFAULT_STD_FEE,
       message: tx.msgs as Msgs[],
       timeoutHeight: timeoutHeight.toNumber(),
-      pubKey: this._privateKey.toPublicKey().toBase64(),
+      pubKey: this._hsm.pub_key_base64,
       sequence: sequence,
       accountNumber: accountDetails.accountNumber,
       chainId: this.chainId,
     });
 
     /** Sign transaction */
-    const signature = await this._privateKey.sign(Buffer.from(signBytes));
+    const signature = this._hsm.sign(Buffer.from(signHashedBytes));
 
     /** Append Signatures */
     txRaw.signatures = [signature];

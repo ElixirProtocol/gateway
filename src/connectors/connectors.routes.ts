@@ -116,8 +116,10 @@ export namespace ConnectorsRoutes {
             chain_type: InjectiveCLOBConfig.config.chainType,
             available_networks: InjectiveCLOBConfig.config.availableNetworks,
             additional_add_wallet_prompts: {
-              accountId:
-                'Enter your injective sub account id wallet key (input 0 if unsure) >>> ',
+              signerAddress:
+                'Enter HSM signer address (Ethereum address as Hex)>>> ',
+              elixirVaultAddress:
+                'Enter Elixir spot vault address (Cosmos address as Bech32) >>> ',
             },
           },
           {
@@ -126,8 +128,10 @@ export namespace ConnectorsRoutes {
             chain_type: InjectiveCLOBConfig.config.chainType,
             available_networks: InjectiveCLOBConfig.config.availableNetworks,
             additional_add_wallet_prompts: {
-              accountId:
-                'Enter your injective sub account id wallet key (input 0 if unsure) >>> ',
+              signerAddress:
+                'Enter HSM signer address (Ethereum address as Hex)>>> ',
+              elixirVaultAddress:
+                'Enter Elixir spot vault address (Cosmos address as Bech32) >>> ',
             },
           },
           {
