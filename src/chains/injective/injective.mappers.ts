@@ -33,7 +33,7 @@ export function getNetworkFromString(network: string): Network | null {
   } else if (network === 'public') {
     return Network.Public;
   } else if (['testnet', 'testnetK8s'].includes(network)) {
-    return Network.TestnetK8s;
+    return Network.Testnet;
   } else if (network === 'devnet1') {
     return Network.Devnet1;
   } else if (network === 'devnet') {

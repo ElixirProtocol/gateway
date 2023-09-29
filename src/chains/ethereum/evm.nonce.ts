@@ -234,9 +234,12 @@ export class EVMNonceManager extends ReferenceCountingCloseable {
       const addressToPendingNonces: Record<string, NonceInfo[]> =
         await this.#db.getPendingNonces(this.#chainName, this.#chainId);
 
-      for (const [address, nonce] of Object.entries(addressToLeadingNonce)) {
+      for (const [address, nonceInfo] of Object.entries(
+        addressToLeadingNonce
+      )) {
+        const { nonce } = nonceInfo;
         logger.info(`Loading leading nonce ${nonce} for address ${address}.`);
-        this.#addressToLeadingNonce[address] = nonce;
+        this.#addressToLeadingNonce[address] = nonceInfo;
       }
 
       for (const [address, pendingNonceInfoList] of Object.entries(
