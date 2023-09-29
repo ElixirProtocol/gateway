@@ -46,12 +46,12 @@ import {
   Currency as SushiCurrency,
   Fraction as SushiFraction,
 } from '@sushiswap/sdk';
+import { TradeV2 as TradeTraderjoe } from '@traderjoe-xyz/sdk-v2';
 import {
   Token as TokenTraderjoe,
   CurrencyAmount as CurrencyAmountTraderjoe,
-  Trade as TradeTraderjoe,
   Fraction as TraderjoeFraction,
-} from '@traderjoe-xyz/sdk';
+} from '@traderjoe-xyz/sdk-core';
 import {
   Token as MMFToken,
   TokenAmount as MMFTokenAmount,

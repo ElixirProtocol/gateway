@@ -16,7 +16,7 @@ import {
 } from '@injectivelabs/sdk-ts';
 import { BigNumber, utils } from 'ethers';
 import LRUCache from 'lru-cache';
-import { OrderSide } from '@injectivelabs/networks/node_modules/@injectivelabs/ts-types/dist/cjs/trade';
+import { OrderSide } from '@injectivelabs/ts-types/';
 import { Injective } from '../../chains/injective/injective';
 import { getInjectiveConfig } from '../../chains/injective/injective.config';
 import {
@@ -210,7 +210,7 @@ export class InjectiveClobPerp {
     req: PerpClobGetOrderRequest
   ): Promise<Array<DerivativeOrderHistory>> {
     const marketId = this.parsedMarkets[req.market].marketId;
-    const orderTypes = [];
+    const orderTypes: OrderSide[] = [];
     if (req.orderTypes) {
       for (const orderTypeString of req.orderTypes.split(',')) {
         const orderType = enumFromStringValue(OrderSide, orderTypeString);

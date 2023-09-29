@@ -5,7 +5,7 @@ import {
 } from '../../services/error-handler';
 import { UniswapConfig } from './uniswap.config';
 import { Contract, ContractInterface } from '@ethersproject/contracts';
-import { Token, CurrencyAmount, Percent, Price } from '@uniswap/sdk-core';
+import { Token, CurrencyAmount, Percent } from '@uniswap/sdk-core';
 import * as uniV3 from '@uniswap/v3-sdk';
 import { AlphaRouter } from '@uniswap/smart-order-router';
 import { providers, Wallet, Signer, utils } from 'ethers';
@@ -307,8 +307,8 @@ export class UniswapLPHelper {
       [amount0, amount1] = [amount1, amount0];
       [lowerPrice, upperPrice] = [1 / upperPrice, 1 / lowerPrice];
     }
-    const lowerPriceInFraction = math.fraction(lowerPrice) as math.Fraction;
-    const upperPriceInFraction = math.fraction(upperPrice) as math.Fraction;
+    // const lowerPriceInFraction = math.fraction(lowerPrice) as math.Fraction;
+    // const upperPriceInFraction = math.fraction(upperPrice) as math.Fraction;
     const poolData = await this.getPoolState(
       uniV3.Pool.getAddress(token0, token1, fee),
       fee
@@ -331,37 +331,41 @@ export class UniswapLPHelper {
       deadline: this.ttl,
     };
 
-    const tickLower = uniV3.nearestUsableTick(
-      uniV3.priceToClosestTick(
-        new Price(
-          token0,
-          token1,
-          utils
-            .parseUnits(lowerPriceInFraction.d.toString(), token0.decimals)
-            .toString(),
-          utils
-            .parseUnits(lowerPriceInFraction.n.toString(), token1.decimals)
-            .toString()
-        )
-      ),
-      uniV3.TICK_SPACINGS[fee]
-    );
+    const tickLower = 0;
 
-    const tickUpper = uniV3.nearestUsableTick(
-      uniV3.priceToClosestTick(
-        new Price(
-          token0,
-          token1,
-          utils
-            .parseUnits(upperPriceInFraction.d.toString(), token0.decimals)
-            .toString(),
-          utils
-            .parseUnits(upperPriceInFraction.n.toString(), token1.decimals)
-            .toString()
-        )
-      ),
-      uniV3.TICK_SPACINGS[fee]
-    );
+    // const tickLower = uniV3.nearestUsableTick(
+    //   uniV3.priceToClosestTick(
+    //     new Price(
+    //       token0,
+    //       token1,
+    //       utils
+    //         .parseUnits(lowerPriceInFraction.d.toString(), token0.decimals)
+    //         .toString(),
+    //       utils
+    //         .parseUnits(lowerPriceInFraction.n.toString(), token1.decimals)
+    //         .toString()
+    //     )
+    //   ),
+    //   uniV3.TICK_SPACINGS[fee]
+    // );
+
+    const tickUpper = 0;
+
+    // const tickUpper = uniV3.nearestUsableTick(
+    //   uniV3.priceToClosestTick(
+    //     new Price(
+    //       token0,
+    //       token1,
+    //       utils
+    //         .parseUnits(upperPriceInFraction.d.toString(), token0.decimals)
+    //         .toString(),
+    //       utils
+    //         .parseUnits(upperPriceInFraction.n.toString(), token1.decimals)
+    //         .toString()
+    //     )
+    //   ),
+    //   uniV3.TICK_SPACINGS[fee]
+    // );
 
     const position = uniV3.Position.fromAmounts({
       pool: pool,
