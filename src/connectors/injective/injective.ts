@@ -6,6 +6,7 @@ import {
   GrpcOrderType,
   spotPriceToChainPriceToFixed,
   spotQuantityToChainQuantityToFixed,
+  MsgExecuteContract,
 } from '@injectivelabs/sdk-ts';
 import {
   ClobMarketsRequest,
@@ -121,13 +122,63 @@ export class InjectiveCLOB implements CLOBish {
   public async postOrder(
     req: ClobPostOrderRequest
   ): Promise<{ txHash: string }> {
-    return await this.orderUpdate(req);
+    const { price, amount, side, market: marketParam } = req;
+    const market = this.parsedMarkets[marketParam];
+    const wallet = await this._chain.getWallet();
+
+    const swapSpotMessage = {
+      swap_spot: {
+        buying: side.toLowerCase() === 'buy',
+        quantity: spotQuantityToChainQuantityToFixed({
+          value: amount,
+          baseDecimals: market.baseToken?.decimals,
+        }),
+        price: spotPriceToChainPriceToFixed({
+          value: price,
+          baseDecimals: market.baseToken?.decimals,
+          quoteDecimals: market.quoteToken?.decimals,
+        }),
+      },
+    };
+
+    const msgToBroadcast = MsgExecuteContract.fromJSON({
+      sender: wallet.signer.bech32Address,
+      contractAddress: wallet.vault.bech32Address,
+      msg: swapSpotMessage,
+    });
+
+    const { txHash } = await this._chain.broadcaster().broadcast({
+      msgs: [msgToBroadcast],
+      injectiveAddress: wallet.signer.bech32Address,
+    });
+
+    return { txHash };
   }
 
   public async deleteOrder(
     req: ClobDeleteOrderRequest
   ): Promise<{ txHash: string }> {
-    return this.orderUpdate(req);
+    const wallet = await this._chain.getWallet();
+    const { orderId } = req;
+
+    const cancelOrderMessage = {
+      cancel_order: {
+        order_hash: orderId,
+      },
+    };
+
+    const msgToBroadcast = MsgExecuteContract.fromJSON({
+      sender: wallet.signer.bech32Address,
+      contractAddress: wallet.vault.bech32Address,
+      msg: cancelOrderMessage,
+    });
+
+    const { txHash } = await this._chain.broadcaster().broadcast({
+      msgs: [msgToBroadcast],
+      injectiveAddress: wallet.signer.bech32Address,
+    });
+
+    return { txHash };
   }
 
   public async batchOrders(
@@ -139,9 +190,8 @@ export class InjectiveCLOB implements CLOBish {
   public async orderUpdate(
     req: ClobDeleteOrderRequest | ClobPostOrderRequest | ClobBatchUpdateRequest
   ): Promise<{ txHash: string }> {
-    const wallet = await this._chain.getWallet(req.address);
-    const privateKey: string = wallet.privateKey;
-    const injectiveAddress: string = wallet.injectiveAddress;
+    const wallet = await this._chain.getWallet();
+    const injectiveAddress: string = wallet.vault.bech32Address;
     let spotOrdersToCreate: CreateOrderParam[] = [];
     let spotOrdersToCancel: ClobDeleteOrderRequestExtract[] = [];
     if ('createOrderParams' in req)
@@ -176,7 +226,7 @@ export class InjectiveCLOB implements CLOBish {
       ),
     });
 
-    const { txHash } = await this._chain.broadcaster(privateKey).broadcast({
+    const { txHash } = await this._chain.broadcaster().broadcast({
       msgs: msg,
       injectiveAddress,
     });

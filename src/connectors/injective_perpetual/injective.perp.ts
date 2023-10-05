@@ -8,6 +8,7 @@ import {
   IndexerGrpcDerivativesApi,
   IndexerGrpcOracleApi,
   MsgBatchUpdateOrders,
+  MsgExecuteContract,
   Orderbook,
   PerpetualMarket,
   Position,
@@ -15,7 +16,7 @@ import {
 } from '@injectivelabs/sdk-ts';
 import { BigNumber, utils } from 'ethers';
 import LRUCache from 'lru-cache';
-import { OrderSide } from '@injectivelabs/networks/node_modules/@injectivelabs/ts-types/dist/cjs/trade';
+import { OrderSide } from '@injectivelabs/ts-types/';
 import { Injective } from '../../chains/injective/injective';
 import { getInjectiveConfig } from '../../chains/injective/injective.config';
 import {
@@ -209,7 +210,7 @@ export class InjectiveClobPerp {
     req: PerpClobGetOrderRequest
   ): Promise<Array<DerivativeOrderHistory>> {
     const marketId = this.parsedMarkets[req.market].marketId;
-    const orderTypes = [];
+    const orderTypes: OrderSide[] = [];
     if (req.orderTypes) {
       for (const orderTypeString of req.orderTypes.split(',')) {
         const orderType = enumFromStringValue(OrderSide, orderTypeString);
@@ -308,13 +309,75 @@ export class InjectiveClobPerp {
   public async postOrder(
     req: PerpClobPostOrderRequest
   ): Promise<{ txHash: string }> {
-    return await this.orderUpdate(req);
+    const wallet = await this._chain.getWallet();
+    const { side, market: marketParam, leverage } = req;
+    const [base, quote] = marketParam.split('-');
+    const price = derivativePriceToChainPriceToFixed({
+      value: req.price,
+      quoteDecimals: this._chain.getTokenForSymbol(quote)?.decimals,
+    });
+    const quantity = derivativeQuantityToChainQuantityToFixed({
+      value: req.amount,
+    });
+    const baseToken = this._chain.getTokenForSymbol(base);
+    const decimalForMargin = baseToken ? baseToken.decimals : 18;
+    const margin = utils.formatUnits(
+      InjectiveClobPerp.calculateMargin(
+        price,
+        quantity,
+        decimalForMargin,
+        leverage
+      ),
+      decimalForMargin
+    );
+
+    const swapPerpMessage = {
+      swap_perpetual: {
+        long: side.toLowerCase() === 'buy',
+        quantity,
+        price,
+        margin,
+      },
+    };
+
+    const msgToBroadcast = MsgExecuteContract.fromJSON({
+      sender: wallet.signer.bech32Address,
+      contractAddress: wallet.vault.bech32Address,
+      msg: swapPerpMessage,
+    });
+
+    const { txHash } = await this._chain.broadcaster().broadcast({
+      msgs: [msgToBroadcast],
+      injectiveAddress: wallet.signer.bech32Address,
+    });
+
+    return { txHash };
   }
 
   public async deleteOrder(
     req: PerpClobDeleteOrderRequest
   ): Promise<{ txHash: string }> {
-    return this.orderUpdate(req);
+    const wallet = await this._chain.getWallet();
+    const { orderId } = req;
+
+    const cancelOrderMessage = {
+      cancel_order: {
+        order_hash: orderId,
+      },
+    };
+
+    const msgToBroadcast = MsgExecuteContract.fromJSON({
+      sender: wallet.signer.bech32Address,
+      contractAddress: wallet.vault.bech32Address,
+      msg: cancelOrderMessage,
+    });
+
+    const { txHash } = await this._chain.broadcaster().broadcast({
+      msgs: [msgToBroadcast],
+      injectiveAddress: wallet.signer.bech32Address,
+    });
+
+    return { txHash };
   }
 
   public async batchPerpOrders(
@@ -535,9 +598,8 @@ export class InjectiveClobPerp {
       | PerpClobPostOrderRequest
       | PerpClobBatchUpdateRequest
   ): Promise<{ txHash: string }> {
-    const wallet = await this._chain.getWallet(req.address);
-    const privateKey: string = wallet.privateKey;
-    const injectiveAddress: string = wallet.injectiveAddress;
+    const wallet = await this._chain.getWallet();
+    const injectiveAddress: string = wallet.vault.bech32Address;
     let derivativeOrdersToCreate: CreatePerpOrderParam[] = [];
     let derivativeOrdersToCancel: ClobDeleteOrderRequestExtract[] = [];
     if ('createOrderParams' in req)
@@ -576,7 +638,7 @@ export class InjectiveClobPerp {
       ),
     });
 
-    const { txHash } = await this._chain.broadcaster(privateKey).broadcast({
+    const { txHash } = await this._chain.broadcaster().broadcast({
       msgs: msg,
       injectiveAddress,
     });

@@ -21,29 +21,21 @@ import { logger } from '../../services/logger';
 import { Wallet as EthereumWallet } from 'ethers';
 import { walletPath } from '../../services/base';
 import fse from 'fs-extra';
-import { ConfigManagerCertPassphrase } from '../../services/config-manager-cert-passphrase';
 import { ChainId } from '@injectivelabs/ts-types';
 import {
+  Address,
   BaseAccount,
   MsgDeposit,
   MsgWithdraw,
   ChainRestAuthApi,
   ChainRestBankApi,
-  IndexerGrpcAccountApi,
   IndexerGrpcSpotApi,
-  PrivateKey,
-  SubaccountBalance,
   TxRestClient,
   ChainRestTendermintApi,
 } from '@injectivelabs/sdk-ts';
 import { Network, getNetworkEndpoints } from '@injectivelabs/networks';
 import { getInjectiveConfig } from './injective.config';
-import {
-  BankBalance,
-  BalancesResponse,
-  SubaccountBalanceSub,
-  SubaccountBalancesWithId,
-} from './injective.requests';
+import { BankBalance, BalancesResponse } from './injective.requests';
 import {
   ConfigManagerV2,
   resolveDBPath,
@@ -54,12 +46,11 @@ import { TokenInfo } from '../../services/base';
 import { EVMNonceManager } from '../ethereum/evm.nonce';
 import { AccountDetails } from '@injectivelabs/sdk-ts/dist/cjs/types/auth';
 import { InjectiveController } from './injective.controllers';
+import { HsmSession } from './injective.hsm';
 
 export interface InjectiveWallet {
-  ethereumAddress: string;
-  injectiveAddress: string;
-  privateKey: string;
-  subaccountId: string;
+  vault: Address;
+  signer: Address;
 }
 
 export class Injective {
@@ -69,13 +60,14 @@ export class Injective {
 
   private _network: Network;
   private _chainId: ChainId;
+  private _hsm!: HsmSession;
   private _chainName: string = 'injective';
   private _endpoints;
   private _denomToToken: Record<string, TokenInfo> = {}; // the addresses are prefixed with things like peggy, ibc, etc. They come from the injective api.
 
   private _symbolToToken: Record<string, TokenInfo> = {};
   private _spotApi: IndexerGrpcSpotApi;
-  private _indexerGrpcAccountApi: IndexerGrpcAccountApi;
+  // private _indexerGrpcAccountApi: IndexerGrpcAccountApi;
   private _chainRestTendermintApi: ChainRestTendermintApi;
   private _chainRestAuthApi: ChainRestAuthApi;
   private _chainRestBankApi: ChainRestBankApi;
@@ -88,7 +80,7 @@ export class Injective {
   public currentBlock = 0;
   public maxCacheSize: number;
   private _blockUpdateIntervalID: number | undefined;
-  private _walletMap: LRUCache<string, InjectiveWallet>;
+  private _wallet!: InjectiveWallet;
   public controller: typeof InjectiveController;
 
   private constructor(network: Network, chainId: ChainId) {
@@ -97,9 +89,9 @@ export class Injective {
     this._endpoints = getNetworkEndpoints(this._network);
     logger.info(`Injective endpoints: ${JSON.stringify(this._endpoints)}`);
     this._spotApi = new IndexerGrpcSpotApi(this._endpoints.indexer);
-    this._indexerGrpcAccountApi = new IndexerGrpcAccountApi(
-      this._endpoints.indexer
-    );
+    // this._indexerGrpcAccountApi = new IndexerGrpcAccountApi(
+    //   this._endpoints.indexer
+    // );
     this._chainRestTendermintApi = new ChainRestTendermintApi(
       <string>this._endpoints.rest
     );
@@ -119,9 +111,6 @@ export class Injective {
     const config = getInjectiveConfig(networkToString(network));
     this.maxCacheSize = config.network.maxLRUCacheInstances;
     this._nonceManager.declareOwnership(this._refCountingHandle);
-    this._walletMap = new LRUCache<string, InjectiveWallet>({
-      max: this.maxCacheSize,
-    });
     this.controller = InjectiveController;
   }
 
@@ -154,6 +143,10 @@ export class Injective {
   public async init(): Promise<void> {
     if (!this.ready() && !this._initializing) {
       this._initializing = true;
+
+      // initialize HSM
+      await this.loadHSM();
+
       // initialize nonce manager
       await this._nonceManager.init(
         async (address: string) => await this.getTransactionCount(address)
@@ -230,6 +223,10 @@ export class Injective {
     return this._nonceManager;
   }
 
+  public get hsm() {
+    return this._hsm;
+  }
+
   public get storedTokenList(): Array<TokenInfo> {
     return Object.values(this._symbolToToken);
   }
@@ -249,10 +246,10 @@ export class Injective {
     return connectedInstances;
   }
 
-  public broadcaster(privateKey: string) {
+  public broadcaster() {
     return MsgBroadcasterLocal.getInstance({
       network: this._network,
-      privateKey,
+      hsm: this._hsm,
     });
   }
 
@@ -270,10 +267,6 @@ export class Injective {
     return await new TxRestClient(this.endpoints.rest).fetchTx(txHash);
   }
 
-  private getPrivateKeyFromHex(privateKey: string): PrivateKey {
-    return PrivateKey.fromHex(privateKey);
-  }
-
   public getWalletFromPrivateKey(privateKey: string): EthereumWallet {
     return new EthereumWallet(privateKey);
   }
@@ -283,47 +276,31 @@ export class Injective {
     return wallet.encrypt(password);
   }
 
-  private async decrypt(
-    encryptedPrivateKey: string,
-    password: string
-  ): Promise<EthereumWallet> {
-    return EthereumWallet.fromEncryptedJson(encryptedPrivateKey, password);
+  public getWallet() {
+    return this._wallet;
   }
 
-  // getWallet by subsaccountid
-  public async getWallet(address: string): Promise<InjectiveWallet> {
-    if (!this._walletMap.has(address)) {
-      this._walletMap.set(address, await this.loadWallet(address));
-    }
-    return this._walletMap.get(address) as InjectiveWallet;
-  }
-
-  private async loadWallet(address: string): Promise<InjectiveWallet> {
+  private async loadHSM(): Promise<void> {
     const path = `${walletPath}/${this._chainName}`;
 
-    const encryptedPrivateKey: string = await fse.readFile(
-      `${path}/${address}.json`,
-      'utf8'
-    );
+    const hsmData: string = await fse.readFile(`${path}/HSM.json`, 'utf8');
+    const {
+      vaultAddress,
+      signerAddress,
+      pubKey,
+      hsmPin,
+      hsmKeyLabel,
+      hsmLibPath,
+    } = JSON.parse(hsmData);
 
-    const passphrase = ConfigManagerCertPassphrase.readPassphrase();
-    if (!passphrase) {
-      throw new Error('missing passphrase');
-    }
-    const ethereumWallet = await this.decrypt(encryptedPrivateKey, passphrase);
-    const privateKey = this.getPrivateKeyFromHex(ethereumWallet.privateKey);
-    const ethereumAddress = privateKey.toHex();
-
-    return {
-      privateKey: ethereumWallet.privateKey,
-      injectiveAddress: privateKey.toBech32(),
-      ethereumAddress,
-      subaccountId: address,
+    this._hsm = new HsmSession(pubKey, hsmPin, hsmKeyLabel, hsmLibPath);
+    this._wallet = {
+      vault: new Address(vaultAddress),
+      signer: Address.fromHex(signerAddress),
     };
   }
 
   public async transferToSubAccount(
-    wallet: InjectiveWallet,
     amount: string, // string encoded float, this needs to be resolved as an integer string
     tokenSymbol: string // the token symbol, this needs to be resolved as the denom
   ): Promise<string> {
@@ -347,13 +324,13 @@ export class Injective {
       };
       const msg = MsgDeposit.fromJSON({
         amount: amountPair,
-        subaccountId: wallet.subaccountId,
-        injectiveAddress: wallet.injectiveAddress,
+        subaccountId: this._wallet.vault.getSubaccountId(0),
+        injectiveAddress: this._wallet.vault.bech32Address,
       });
 
-      const response = await this.broadcaster(wallet.privateKey).broadcast({
+      const response = await this.broadcaster().broadcast({
         msgs: msg,
-        injectiveAddress: wallet.injectiveAddress,
+        injectiveAddress: this._wallet.vault.bech32Address,
       });
       return response.txHash;
     } else {
@@ -366,7 +343,6 @@ export class Injective {
   }
 
   public async transferToBankAccount(
-    wallet: InjectiveWallet,
     amount: string, // string encoded float, this needs to be resolved as an integer string
     tokenSymbol: string // the token symbol, this needs to be resolved as the denom
   ): Promise<string> {
@@ -391,13 +367,13 @@ export class Injective {
       };
       const msg = MsgWithdraw.fromJSON({
         amount: amountPair,
-        subaccountId: wallet.subaccountId,
-        injectiveAddress: wallet.injectiveAddress,
+        subaccountId: this._wallet.vault.getSubaccountId(0),
+        injectiveAddress: this._wallet.vault.bech32Address,
       });
 
-      const response = await this.broadcaster(wallet.privateKey).broadcast({
+      const response = await this.broadcaster().broadcast({
         msgs: msg,
-        injectiveAddress: wallet.injectiveAddress,
+        injectiveAddress: this._wallet.vault.bech32Address,
       });
       return response.txHash;
     } else {
@@ -422,9 +398,10 @@ export class Injective {
     }
   }
 
-  public async balances(wallet: InjectiveWallet): Promise<BalancesResponse> {
+  public async balances(): Promise<BalancesResponse> {
+    const wallet = this.getWallet();
     const bankBalancesRaw = await this._chainRestBankApi.fetchBalances(
-      wallet.injectiveAddress
+      wallet.vault.bech32Address
     );
     const bankBalances: Array<BankBalance> = [];
     for (const bankBalance of bankBalancesRaw.balances) {
@@ -440,61 +417,61 @@ export class Injective {
       }
     }
 
-    const subaccountIds =
-      await this._indexerGrpcAccountApi.fetchSubaccountsList(
-        wallet.injectiveAddress
-      );
+    // const subaccountIds =
+    //   await this._indexerGrpcAccountApi.fetchSubaccountsList(
+    //     wallet.vault.bech32Address
+    //   );
 
-    const promises: Array<Promise<Array<SubaccountBalance>>> = [];
-    for (const subaccountId of subaccountIds) {
-      promises.push(
-        this._indexerGrpcAccountApi.fetchSubaccountBalancesList(subaccountId)
-      );
-    }
+    // const promises: Array<Promise<Array<SubaccountBalance>>> = [];
+    // for (const subaccountId of subaccountIds) {
+    //   promises.push(
+    //     this._indexerGrpcAccountApi.fetchSubaccountBalancesList(subaccountId)
+    //   );
+    // }
 
-    const subaccountData = await Promise.all(promises);
+    // const subaccountData = await Promise.all(promises);
 
-    const subaccounts: Array<SubaccountBalancesWithId> = [];
-    for (const subaccountBalances of subaccountData) {
-      if (subaccountBalances.length > 0) {
-        const balances: Array<SubaccountBalanceSub> = [];
-        for (const subaccountBalance of subaccountBalances) {
-          if (subaccountBalance.deposit) {
-            const token = await this.getTokenByDenom(subaccountBalance.denom);
-            if (token !== undefined) {
-              const balance: SubaccountBalanceSub = {
-                token: token.symbol,
+    // const subaccounts: Array<SubaccountBalancesWithId> = [];
+    // for (const subaccountBalances of subaccountData) {
+    //   if (subaccountBalances.length > 0) {
+    //     const balances: Array<SubaccountBalanceSub> = [];
+    //     for (const subaccountBalance of subaccountBalances) {
+    //       if (subaccountBalance.deposit) {
+    //         const token = await this.getTokenByDenom(subaccountBalance.denom);
+    //         if (token !== undefined) {
+    //           const balance: SubaccountBalanceSub = {
+    //             token: token.symbol,
 
-                totalBalance: bigNumberWithDecimalToStr(
-                  BigNumber.from(
-                    subaccountBalance.deposit.totalBalance.split('.')[0]
-                  ),
-                  token.decimals
-                ),
-                availableBalance: bigNumberWithDecimalToStr(
-                  BigNumber.from(
-                    subaccountBalance.deposit.availableBalance.split('.')[0]
-                  ),
-                  token.decimals
-                ),
-              };
-              balances.push(balance);
-            }
-          }
-        }
-        const subaccount = {
-          subaccountId: subaccountBalances[0].subaccountId,
-          balances,
-        };
+    //             totalBalance: bigNumberWithDecimalToStr(
+    //               BigNumber.from(
+    //                 subaccountBalance.deposit.totalBalance.split('.')[0]
+    //               ),
+    //               token.decimals
+    //             ),
+    //             availableBalance: bigNumberWithDecimalToStr(
+    //               BigNumber.from(
+    //                 subaccountBalance.deposit.availableBalance.split('.')[0]
+    //               ),
+    //               token.decimals
+    //             ),
+    //           };
+    //           balances.push(balance);
+    //         }
+    //       }
+    //     }
+    //     const subaccount = {
+    //       subaccountId: subaccountBalances[0].subaccountId,
+    //       balances,
+    //     };
 
-        subaccounts.push(subaccount);
-      }
-    }
+    //     subaccounts.push(subaccount);
+    //   }
+    // }
 
     return {
       balances: bankBalances,
-      injectiveAddress: wallet.injectiveAddress,
-      subaccounts: subaccounts,
+      injectiveAddress: wallet.vault.bech32Address,
+      subaccounts: [],
     };
   }
 

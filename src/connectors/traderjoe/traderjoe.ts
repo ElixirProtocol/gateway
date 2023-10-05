@@ -12,7 +12,8 @@ import { TraderjoeConfig } from './traderjoe.config';
 import { logger } from '../../services/logger';
 import { Avalanche } from '../../chains/avalanche/avalanche';
 import { ExpectedTrade, Uniswapish } from '../../services/common-interfaces';
-import { Token, TokenAmount, JSBI, Percent } from '@traderjoe-xyz/sdk';
+import { JSBI } from '@traderjoe-xyz/sdk-v2';
+import { Token, TokenAmount, Percent } from '@traderjoe-xyz/sdk-core';
 import {
   LBRouterV21ABI,
   PairV2,

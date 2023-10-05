@@ -25,11 +25,9 @@ export class InjectiveController {
     validateTransferRequest(req);
 
     if (req.from.length > req.to.length) {
-      const wallet = await injective.getWallet(req.from);
-      return injective.transferToBankAccount(wallet, req.amount, req.token);
+      return injective.transferToBankAccount(req.amount, req.token);
     } else {
-      const wallet = await injective.getWallet(req.to);
-      return injective.transferToSubAccount(wallet, req.amount, req.token);
+      return injective.transferToSubAccount(req.amount, req.token);
     }
   }
 
@@ -38,9 +36,7 @@ export class InjectiveController {
     req: BalancesRequest
   ): Promise<BalancesResponse> {
     validateBalanceRequest(req);
-
-    const wallet = await injective.getWallet(req.address);
-    return injective.balances(wallet);
+    return injective.balances();
   }
 
   static async poll(
