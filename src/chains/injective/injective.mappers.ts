@@ -27,7 +27,7 @@ export function chainIdToInt(chainId: ChainId): number {
 
 export function getNetworkFromString(network: string): Network | null {
   if (['mainnet', 'mainnetLB'].includes(network)) {
-    return Network.MainnetLB;
+    return Network.Mainnet;
   } else if (network === 'staging') {
     return Network.Staging;
   } else if (network === 'public') {
